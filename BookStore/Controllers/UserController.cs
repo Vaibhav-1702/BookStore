@@ -19,6 +19,12 @@ namespace BookStore.Controllers
                 
         }
 
+         [HttpGet("Test")]
+        public string GetAllBooks()
+        {
+            return "Hi";
+        }
+
         [HttpPost("RegisterUser")]
         public async Task<ResponseModel<User>> Registration(UserRegistration userRegistration)
         {
