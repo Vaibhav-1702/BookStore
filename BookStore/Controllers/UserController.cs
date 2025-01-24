@@ -19,11 +19,11 @@ namespace BookStore.Controllers
                 
         }
 
-         [HttpGet("Test")]
-        public string GetAllBooks()
-        {
-            return "Hi";
-        }
+          [HttpGet("Test")]
+    public IActionResult Test()
+    {
+        return Ok("Test endpoint is working");
+    }
 
         [HttpPost("RegisterUser")]
         public async Task<ResponseModel<User>> Registration(UserRegistration userRegistration)
