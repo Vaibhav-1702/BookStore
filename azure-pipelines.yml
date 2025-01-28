@@ -1,0 +1,151 @@
+
+resources:
+  repositories:
+    - repository: myGitHubRepo
+      type: github
+      name: Vaibhav-1702/BookStore
+      endpoint: github.com_Vaibhav-1702
+
+trigger:
+- main
+
+variables:
+  vmConnectionName: 'backend'
+  vmIpAddress: '172.174.236.109'
+  projectName: 'BookStore'
+  deployPath: '/home/azureuser/BookStore'
+
+stages:
+- stage: InstallDotNet
+  displayName: "Install .NET SDK"
+  jobs:
+  - deployment: InstallDotNetToVM
+    displayName: "Install .NET on VM"
+    environment: 'Development'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: '$(vmConnectionName)'
+              runOptions: 'inline'
+              inline: |
+                # Update package list
+                echo "Updating package list..."
+                sudo apt-get update
+
+                if ! dotnet --version | grep -q '6.0'; then
+                  echo "Installing .NET SDK..."
+                  sudo snap install dotnet-sdk --classic --channel=6.0
+                  echo "Installing .NET Runtime..."
+                  sudo snap install dotnet-runtime-60
+                else
+                  echo ".NET SDK and Runtime already installed."
+                fi
+
+- stage: Build
+  jobs:
+  - job: BuildJob
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        version: '6.0.408'
+    
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+      displayName: 'Restore NuGet packages'
+      
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+        arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)'
+      displayName: 'Build the project'
+    
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+      displayName: 'Publish build artifacts'
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - deployment: DeployToVM
+    environment: 'Production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifact: 'drop'
+              path: '$(Pipeline.Workspace)/drop'
+          - task: SSH@0
+            inputs:
+              sshEndpoint: '$(vmConnectionName)'
+              runOptions: 'commands'
+              commands: |
+                # Create directory with proper permissions
+                sudo mkdir -p $(deployPath)
+                sudo chown azureuser:azureuser $(deployPath)
+                sudo chmod 755 $(deployPath)
+          - task: CopyFilesOverSSH@0
+            inputs:
+              sshEndpoint: '$(vmConnectionName)'
+              sourceFolder: '$(Pipeline.Workspace)/drop'
+              targetFolder: '$(deployPath)'    
+              cleanTargetFolder: true
+          - task: SSH@0
+            inputs:
+              sshEndpoint: '$(vmConnectionName)'
+              runOptions: 'inline'
+              inline: |
+                set -e
+                # Path to the service file
+                serviceFilePath="/etc/systemd/system/BookStore.service"
+
+                # Content for the service file
+                serviceFileContent="
+                [Unit]
+                Description=BookStore .NET Application
+                After=network.target
+
+                [Service]
+                WorkingDirectory=/home/azureuser/BookStore
+                ExecStart=/snap/bin/dotnet BookStore.dll
+
+                Restart=always
+                RestartSec=10
+                User=azureuser
+                Environment=ASPNETCORE_ENVIRONMENT=Production
+                Environment=ASPNETCORE_URLS="http://0.0.0.0:5000"
+
+                [Install]
+                WantedBy=multi-user.target"
+
+                # Check if the service file already exists
+                if [ -f "$serviceFilePath" ]; then
+                  echo "Service file exists. Stopping the service..."
+                  sudo systemctl stop BookStore.service || true
+                else
+                  echo "Service file does not exist. Creating it..."
+                fi
+
+                # Write the service file
+                echo "$serviceFileContent" | sudo tee $serviceFilePath > /dev/null
+
+                # Reload systemd and restart the service
+                sudo systemctl daemon-reload
+                sudo systemctl restart BookStore.service
+                sudo systemctl enable BookStore.service
