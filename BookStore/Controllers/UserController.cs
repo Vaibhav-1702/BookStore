@@ -25,6 +25,11 @@ namespace BookStore.Controllers
             return await _userBL.Registration(userRegistration);
         }
 
+        [HttpGet("Test")]
+        public IActionResult Test()
+        {
+            return Ok("Test endpoint is working");
+        }
 
         [HttpPut("UpdateUser")]
         public async Task<ResponseModel<User>> Update(UpdateUser updateUser)
